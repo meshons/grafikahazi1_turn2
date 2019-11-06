@@ -1,5 +1,5 @@
 //=============================================================================================
-// Mintaprogram: Z�ld h�romsz�g. Ervenyes 2018. osztol.
+// Mintaprogram: Zold haromszog. Ervenyes 2018. osztol.
 //
 // A beadott program csak ebben a fajlban lehet, a fajl 1 byte-os ASCII karaktereket tartalmazhat, BOM kihuzando.
 // Tilos:
@@ -39,10 +39,12 @@ const char * const vertexSource = R"(
 	precision highp float;		// normal floats, makes no difference on desktop computers
 
 	uniform mat4 MVP;			// uniform variable, the Model-View-Projection transformation matrix
+    uniform float scale;        // scale
+    uniform float translateX;   // x translate
 	layout(location = 0) in vec2 vp;	// Varying input: vp = vertex position is expected in attrib array 0
 
 	void main() {
-		gl_Position = vec4(vp.x, vp.y, 0, 1) * MVP;		// transform vp from modeling space to normalized device space
+		gl_Position = vec4(vp.x * scale - translateX, vp.y * scale, 0, 1) * MVP;
 	}
 )";
 
@@ -60,16 +62,22 @@ const char * const fragmentSource = R"(
 )";
 
 GPUProgram gpuProgram; // vertex and fragment shaders
+float scale = 1.0;
+float translateX = 0.0;
+bool start = false;
 
 class spline
 {
 private:
     GLuint vao, vbo;
 
-    vec2 calculatedPoints[3600];
+    vec2 calculatedPoints[3602];
+    vec2 areaPolygon[100];
+    std::vector<vec2> plainControlPoints;
     std::vector<vec2> controlPoints;
     std::vector<float> controlPointPositions;
-    bool modified = false;
+    vec2 center;
+    float area;
 
     vec2 v(const vec2 & p1, float t1, const vec2 & p2, float t2, const vec2 & p3, float t3) const {
         return (((p3 - p2) * (1 / (t3 - t2)) + ((p2 - p1) * (1 / (t2 - t1)))) * 0.5f);
@@ -79,6 +87,16 @@ private:
             const vec2 & p1, float t1, const vec2 & p2, float t2, const vec2 & p3, float t3, const vec2 & p4, float t4,
             float t
     ) const {
+        if (t1 > t2) {
+            t+=3600;
+            t2+=3600;
+            t4+=3600;
+            t3+=3600;
+        }
+        if (t < t2) t+=3600;
+        if (t3 < t2) t3+=3600;
+        if (t4 < t2) t4+=3600;
+
         vec2 v2 = v(p1, t1, p2, t2, p3, t3);
         vec2 v3 = v(p2, t2, p3, t3, p4, t4);
 
@@ -94,7 +112,6 @@ private:
         float tt2 = tt1 * tt0;
 
         return {a3 * tt2 + a2 * tt1 + a1 * tt0 + a0};
-
     }
 
     int overflow(int number) const {
@@ -115,6 +132,52 @@ private:
         );
     }
 
+    void calculateCenter() {
+        vec2 sum = {0, 0};
+        for (const auto & cp : plainControlPoints)
+            sum = sum + cp;
+        center = sum / plainControlPoints.size();
+    }
+
+    void calculateCPPositions() {
+        controlPoints.clear();
+        controlPointPositions.clear();
+        controlPoints.reserve(plainControlPoints.size());
+        controlPointPositions.reserve(plainControlPoints.size());
+        for (const auto & cp : plainControlPoints)
+            addControlPoint(cp);
+    }
+
+    void addControlPoint(const vec2 & point) {
+        vec2 centerTop = center + vec2{0, 1.0};
+        float t = acos(dot(centerTop, point) / length(point) / length(centerTop)) / M_PI * 1800;
+
+        if (point.x < 0)
+            t = 3600 - t;
+        auto cpIt = controlPoints.begin();
+        auto cppIt = controlPointPositions.begin();
+        for (int i = 0; i < controlPoints.size(); ++i) {
+            if (*cppIt == t)
+                return;
+            if (*cppIt > t) {
+                controlPointPositions.insert(cppIt, t);
+                controlPoints.insert(cpIt, point);
+                return;
+            }
+            ++cpIt;
+            ++cppIt;
+        }
+        controlPointPositions.push_back(t);
+        controlPoints.push_back(point);
+    }
+
+    void calculateArea() {
+        for (int i = 0; i < 100; ++i) {
+            areaPolygon[i] = r((float)(i*36));
+        }
+        
+    }
+
 public:
     vec2 r(float t) const {
         if (controlPointPositions.size() < 2)
@@ -128,25 +191,10 @@ public:
     }
 
     void addPoint(vec2 && point) {
-        float t = acos(dot({0,1.0}, point) / length(point)) / M_PI * 1800;
-        if (point.x < 0)
-            t = 3600 - t;
-        auto cpIt = controlPoints.begin();
-        auto cppIt = controlPointPositions.begin();
-        for (int i = 0; i < controlPoints.size(); ++i) {
-            if (*cppIt == t)
-                return;
-            if (*cppIt < t) {
-                controlPointPositions.insert(cppIt, t);
-                controlPoints.insert(cpIt, point);
-                modified = true;
-                return;
-            }
-            ++cpIt;
-            ++cppIt;
-        }
-        controlPointPositions.push_back(t);
-        controlPoints.push_back(point);
+        plainControlPoints.push_back(point);
+        calculateCenter();
+        calculateCPPositions();
+        calculateArea();
     }
 
     void Create() {
@@ -167,20 +215,37 @@ public:
 
     void Draw() {
         glBindVertexArray(vao);
-        if (modified) {
-            for (int i = 0; i < 3600; ++i) {
-                calculatedPoints[i] = r((float)i);
-            }
-            glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(calculatedPoints), calculatedPoints);
-            modified = false;
+        calculatedPoints[0] = center;
+        for (int i = 1; i < 3601; ++i) {
+            calculatedPoints[i] = r((float)(i-1));
         }
+        calculatedPoints[3601] = calculatedPoints[1];
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(calculatedPoints), calculatedPoints);
 
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 3600);
+
+        int location = glGetUniformLocation(gpuProgram.getId(), "color");
+        glUniform3f(location, 0.0f, 1.0f, 1.0f);
+
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 3602);
+
+        location = glGetUniformLocation(gpuProgram.getId(), "color");
+        glUniform3f(location, 1.0f, 1.0f, 1.0f);
+        glDrawArrays(GL_LINE_LOOP, 1, 3600);
     }
 };
 
 spline sp;
+
+void setScale() {
+    int location = glGetUniformLocation(gpuProgram.getId(), "scale");
+    glUniform1f(location, scale);
+}
+
+void setTranslateX() {
+    int location = glGetUniformLocation(gpuProgram.getId(), "translateX");
+    glUniform1f(location, translateX);
+}
 
 // Initialization, create an OpenGL context
 void onInitialization() {
@@ -193,22 +258,21 @@ void onInitialization() {
 
 // Window has become invalid: Redraw
 void onDisplay() {
-    glClearColor(1, 1, 1, 1);     // background color
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); // clear frame buffer
-
-    // Set color to (0, 1, 0) = green
-    int location = glGetUniformLocation(gpuProgram.getId(), "color");
-    glUniform3f(location, 0.0f, 1.0f, 0.0f); // 3 floats
+    glClearColor(0, 0, 0, 0);     // background color
+    glClear(GL_COLOR_BUFFER_BIT); // clear frame buffer
 
     float MVPtransf[4][4] = {1, 0, 0, 0,    // MVP matrix,
                              0, 1, 0, 0,    // row-major!
                              0, 0, 1, 0,
                              0, 0, 0, 1};
 
-    location = glGetUniformLocation(gpuProgram.getId(), "MVP");    // Get the GPU location of uniform variable MVP
+    int location = glGetUniformLocation(gpuProgram.getId(), "MVP");    // Get the GPU location of uniform variable MVP
     glUniformMatrix4fv(
             location, 1, GL_TRUE, &MVPtransf[0][0]
     );    // Load a 4x4 row-major float matrix to the specified location
+
+    setScale();
+    setTranslateX();
 
     sp.Draw();
 
@@ -217,8 +281,15 @@ void onDisplay() {
 
 // Key of ASCII code pressed
 void onKeyboard(unsigned char key, int pX, int pY) {
-    if (key == 'd')
-        glutPostRedisplay();         // if d, invalidate display, i.e. redraw
+    if (key == 'p') {
+        translateX += 0.1f;
+        setTranslateX();
+        glutPostRedisplay();
+    } else if (key == 'z') {
+        scale*=1.1;
+        setScale();
+        glutPostRedisplay();
+    }
 }
 
 // Key of ASCII code released
@@ -242,7 +313,7 @@ void onMouse(
     switch (button) {
         case GLUT_LEFT_BUTTON:
             if (state == GLUT_DOWN)
-                sp.addPoint({cX, cY});
+                sp.addPoint({cX / scale, cY / scale});
             break;
     }
 }
