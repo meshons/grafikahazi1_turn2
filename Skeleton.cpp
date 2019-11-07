@@ -72,12 +72,13 @@ private:
     GLuint vao, vbo;
 
     vec2 calculatedPoints[3602];
-    vec2 areaPolygon[100];
     std::vector<vec2> plainControlPoints;
     std::vector<vec2> controlPoints;
     std::vector<float> controlPointPositions;
     vec2 center;
     float area;
+
+    std::vector<vec2> targetPoints;
 
     vec2 v(const vec2 & p1, float t1, const vec2 & p2, float t2, const vec2 & p3, float t3) const {
         return (((p3 - p2) * (1 / (t3 - t2)) + ((p2 - p1) * (1 / (t2 - t1)))) * 0.5f);
@@ -88,22 +89,24 @@ private:
             float t
     ) const {
         if (t1 > t2) {
-            t+=3600;
-            t2+=3600;
-            t4+=3600;
-            t3+=3600;
+            t += 3600;
+            t2 += 3600;
+            t4 += 3600;
+            t3 += 3600;
         }
-        if (t < t2) t+=3600;
-        if (t3 < t2) t3+=3600;
-        if (t4 < t2) t4+=3600;
+        if (t < t2)
+            t += 3600;
+        if (t3 < t2)
+            t3 += 3600;
+        if (t4 < t2)
+            t4 += 3600;
 
         vec2 v2 = v(p1, t1, p2, t2, p3, t3);
         vec2 v3 = v(p2, t2, p3, t3, p4, t4);
 
         vec2 a0 = p2;
         vec2 a1 = v2;
-        vec2 a2 = (((p3 - p2) * 3.0f) * (1 / ((t3 - t2) * ((t3 - t2))))) -
-                  ((v3 + v2 * 2.0f) * (1 / (t3 - t2)));
+        vec2 a2 = (((p3 - p2) * 3.0f) * (1 / ((t3 - t2) * ((t3 - t2))))) - ((v3 + v2 * 2.0f) * (1 / (t3 - t2)));
         vec2 a3 = (((p2 - p3) * 2.0f) * (1 / ((t3 - t2) * (t3 - t2) * (t3 - t2)))) +
                   ((v3 + v2) * (1 / ((t3 - t2) * (t3 - t2))));
 
@@ -127,16 +130,15 @@ private:
                 controlPoints[overflow(number - 2)], controlPointPositions[overflow(number - 2)],
                 controlPoints[overflow(number - 1)], controlPointPositions[overflow(number - 1)],
                 controlPoints[overflow(number)], controlPointPositions[overflow(number)],
-                controlPoints[overflow(number + 1)], controlPointPositions[overflow(number + 1)],
-                t
+                controlPoints[overflow(number + 1)], controlPointPositions[overflow(number + 1)], t
         );
     }
 
-    void calculateCenter() {
+    vec2 calculateCenter() {
         vec2 sum = {0, 0};
         for (const auto & cp : plainControlPoints)
             sum = sum + cp;
-        center = sum / plainControlPoints.size();
+        return sum / plainControlPoints.size();
     }
 
     void calculateCPPositions() {
@@ -171,11 +173,54 @@ private:
         controlPoints.push_back(point);
     }
 
-    void calculateArea() {
+    float calculateArea() const {
+        vec2 areaPolygons[100];
         for (int i = 0; i < 100; ++i) {
-            areaPolygon[i] = r((float)(i*36));
+            areaPolygons[i] = r((float) (i * 36));
         }
-        
+        float sum1 = 0;
+        float sum2 = 0;
+        for (int i = 1; i < 100; ++i) {
+            sum1 += areaPolygons[i - 1].x * areaPolygons[i].y;
+            sum2 += areaPolygons[i].x * areaPolygons[i - 1].y;
+        }
+        sum1 += areaPolygons[99].x * areaPolygons[0].y;
+        sum2 += areaPolygons[0].x * areaPolygons[99].y;
+        return abs((sum1 - sum2) / 2);
+    }
+
+    void calculateTargetPoints() {
+        targetPoints.clear();
+        targetPoints.reserve(controlPoints.size());
+        auto r = (float)sqrt(area / M_PI);
+        for (int i = 0; i < controlPoints.size(); ++i)
+            targetPoints.push_back(createPointOnCircle(r, i));
+    }
+
+    vec2 createPointOnCircle(float r, int i) const {
+        float y = center.x + r * (float)cos((float)i / controlPoints.size() * 2 * M_PI);
+        float x = center.y + r * (float)sin((float)i / controlPoints.size() * 2 * M_PI);
+        return {x, y};
+    }
+
+    void resizeToArea() {
+        float currentArea = calculateArea();
+        while (area - 0.01 < currentArea && currentArea < area + 0.01) {
+            float currentScale = sqrt(area/currentArea);
+
+            for (auto & controlPoint : controlPoints) {
+                controlPoint = controlPoint - center;
+                controlPoint = controlPoint * scale;
+                controlPoint = controlPoint + center;
+            }
+        }
+    }
+
+    void recenter() {
+        vec2 currentCenter = calculateCenter();
+        vec2 transform = center - currentCenter;
+        for (auto & controlPoint : controlPoints)
+            controlPoint = controlPoint + transform;
     }
 
 public:
@@ -192,37 +237,38 @@ public:
 
     void addPoint(vec2 && point) {
         plainControlPoints.push_back(point);
-        calculateCenter();
+        center = calculateCenter();
         calculateCPPositions();
-        calculateArea();
+        area = calculateArea();
+        calculateTargetPoints();
     }
 
-    void Create() {
+    void create() {
         glGenVertexArrays(1, &vao);
         glBindVertexArray(vao);
         glGenBuffers(1, &vbo);
 
         for (auto & calculatedPoint : calculatedPoints) {
-            calculatedPoint = {0,0};
+            calculatedPoint = {0, 0};
         }
 
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(calculatedPoints), calculatedPoints, GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(calculatedPoints) * 2, nullptr, GL_DYNAMIC_DRAW);
 
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
     }
 
-    void Draw() {
+    void draw() {
         glBindVertexArray(vao);
         calculatedPoints[0] = center;
         for (int i = 1; i < 3601; ++i) {
-            calculatedPoints[i] = r((float)(i-1));
+            calculatedPoints[i] = r((float) (i - 1));
         }
         calculatedPoints[3601] = calculatedPoints[1];
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(calculatedPoints), calculatedPoints);
-
+        glBufferSubData(GL_ARRAY_BUFFER, sizeof(calculatedPoints), targetPoints.size() * sizeof(vec2), targetPoints.data());
 
         int location = glGetUniformLocation(gpuProgram.getId(), "color");
         glUniform3f(location, 0.0f, 1.0f, 1.0f);
@@ -232,6 +278,22 @@ public:
         location = glGetUniformLocation(gpuProgram.getId(), "color");
         glUniform3f(location, 1.0f, 1.0f, 1.0f);
         glDrawArrays(GL_LINE_LOOP, 1, 3600);
+
+        glDrawArrays(GL_LINE_LOOP, 3602, targetPoints.size());
+    }
+
+    void animate(long elapsedTime) {
+        if (start && controlPoints.size() > 1) {
+            for (int i = 0; i < controlPoints.size(); ++i) {
+                vec2 dir = targetPoints[i] - controlPoints[i];
+                dir = normalize(dir);
+                dir = dir * 0.01;
+                controlPoints[i] = controlPoints[i] + dir;
+            }
+
+            resizeToArea();
+            recenter();
+        }
     }
 };
 
@@ -251,7 +313,7 @@ void setTranslateX() {
 void onInitialization() {
     glViewport(0, 0, windowWidth, windowHeight);
 
-    sp.Create();
+    sp.create();
 
     gpuProgram.create(vertexSource, fragmentSource, "outColor");
 }
@@ -263,8 +325,7 @@ void onDisplay() {
 
     float MVPtransf[4][4] = {1, 0, 0, 0,    // MVP matrix,
                              0, 1, 0, 0,    // row-major!
-                             0, 0, 1, 0,
-                             0, 0, 0, 1};
+                             0, 0, 1, 0, 0, 0, 0, 1};
 
     int location = glGetUniformLocation(gpuProgram.getId(), "MVP");    // Get the GPU location of uniform variable MVP
     glUniformMatrix4fv(
@@ -274,7 +335,7 @@ void onDisplay() {
     setScale();
     setTranslateX();
 
-    sp.Draw();
+    sp.draw();
 
     glutSwapBuffers(); // exchange buffers for double buffering
 }
@@ -286,8 +347,11 @@ void onKeyboard(unsigned char key, int pX, int pY) {
         setTranslateX();
         glutPostRedisplay();
     } else if (key == 'z') {
-        scale*=1.1;
+        scale *= 1.1;
         setScale();
+        glutPostRedisplay();
+    } else if (key == 'a') {
+        start = true;
         glutPostRedisplay();
     }
 }
@@ -310,16 +374,16 @@ void onMouse(
     float cX = 2.0f * pX / windowWidth - 1;    // flip y axis
     float cY = 1.0f - 2.0f * pY / windowHeight;
 
-    switch (button) {
-        case GLUT_LEFT_BUTTON:
-            if (state == GLUT_DOWN)
-                sp.addPoint({cX / scale, cY / scale});
-            break;
-    }
+    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN && !start)
+        sp.addPoint({cX / scale, cY / scale});
 }
+
+long lastTime = 0;
 
 // Idle event indicating that some time elapsed: do animation here
 void onIdle() {
     long time = glutGet(GLUT_ELAPSED_TIME); // elapsed time since the start of the program
+    sp.animate(time-lastTime);
+    lastTime = time;
     glutPostRedisplay();
 }
