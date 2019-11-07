@@ -192,27 +192,28 @@ private:
     void calculateTargetPoints() {
         targetPoints.clear();
         targetPoints.reserve(controlPoints.size());
-        auto r = (float)sqrt(area / M_PI);
+        auto r = (float)sqrt(area / M_PI) * (float)controlPoints.size();
         for (int i = 0; i < controlPoints.size(); ++i)
             targetPoints.push_back(createPointOnCircle(r, i));
     }
 
     vec2 createPointOnCircle(float r, int i) const {
-        float y = center.x + r * (float)cos((float)i / controlPoints.size() * 2 * M_PI);
-        float x = center.y + r * (float)sin((float)i / controlPoints.size() * 2 * M_PI);
+        float y = center.y + r * (float)cos((float)i / controlPoints.size() * 2 * M_PI);
+        float x = center.x + r * (float)sin((float)i / controlPoints.size() * 2 * M_PI);
         return {x, y};
     }
 
     void resizeToArea() {
         float currentArea = calculateArea();
-        while (area - 0.01 < currentArea && currentArea < area + 0.01) {
+        while (!(area - 0.02f < currentArea && currentArea < area + 0.02f)) {
             float currentScale = sqrt(area/currentArea);
 
             for (auto & controlPoint : controlPoints) {
                 controlPoint = controlPoint - center;
-                controlPoint = controlPoint * scale;
+                controlPoint = controlPoint * currentScale;
                 controlPoint = controlPoint + center;
             }
+            currentArea = calculateArea();
         }
     }
 
@@ -268,7 +269,10 @@ public:
         calculatedPoints[3601] = calculatedPoints[1];
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(calculatedPoints), calculatedPoints);
-        glBufferSubData(GL_ARRAY_BUFFER, sizeof(calculatedPoints), targetPoints.size() * sizeof(vec2), targetPoints.data());
+        glBufferSubData(GL_ARRAY_BUFFER, sizeof(calculatedPoints), targetPoints.size() * sizeof(vec2), targetPoints
+        .data());
+        glBufferSubData(GL_ARRAY_BUFFER, sizeof(calculatedPoints)+targetPoints.size()* sizeof(vec2), controlPoints
+        .size() * sizeof(vec2), controlPoints.data());
 
         int location = glGetUniformLocation(gpuProgram.getId(), "color");
         glUniform3f(location, 0.0f, 1.0f, 1.0f);
@@ -279,7 +283,9 @@ public:
         glUniform3f(location, 1.0f, 1.0f, 1.0f);
         glDrawArrays(GL_LINE_LOOP, 1, 3600);
 
-        glDrawArrays(GL_LINE_LOOP, 3602, targetPoints.size());
+        //glDrawArrays(GL_LINE_LOOP, 3602, targetPoints.size());
+
+        //glDrawArrays(GL_LINE_LOOP, 3602+targetPoints.size(), controlPoints.size());
     }
 
     void animate(long elapsedTime) {
@@ -287,13 +293,20 @@ public:
             for (int i = 0; i < controlPoints.size(); ++i) {
                 vec2 dir = targetPoints[i] - controlPoints[i];
                 dir = normalize(dir);
-                dir = dir * 0.01;
+                dir = dir * elapsedTime / 2000.0f;
                 controlPoints[i] = controlPoints[i] + dir;
             }
 
             resizeToArea();
             recenter();
         }
+    }
+
+    void reset() {
+        controlPoints.clear();
+        controlPointPositions.clear();
+        targetPoints.clear();
+        plainControlPoints.clear();
     }
 };
 
@@ -352,6 +365,10 @@ void onKeyboard(unsigned char key, int pX, int pY) {
         glutPostRedisplay();
     } else if (key == 'a') {
         start = true;
+        glutPostRedisplay();
+    } else if (key == 'r') {
+        start = false;
+        sp.reset();
         glutPostRedisplay();
     }
 }
